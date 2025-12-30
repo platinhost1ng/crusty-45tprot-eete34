@@ -173,18 +173,27 @@ async function sendBackupToDiscord() {
 // ----------------------
 client.once("ready", async () => {
   console.log(`✅ Discord bot logged in as ${client.user.tag}`);
+  console.log(`🤖 Bot is now ONLINE and ready!`);
   
   // Load from Discord backup if no webhooks loaded
   if (webhooks.size === 0) {
+    console.log("⚠️ No webhooks in memory, attempting to load from Discord backup...");
     try {
       await loadFromDiscordBackup();
     } catch (e) {
       console.error("⚠️ Backup load failed:", e.message);
     }
+  } else {
+    console.log(`✅ ${webhooks.size} webhooks already loaded in memory`);
   }
   
   // Start backup interval
   setInterval(sendBackupToDiscord, BACKUP_INTERVAL);
+  console.log(`✅ Backup interval started (every ${BACKUP_INTERVAL / 1000} seconds)`);
+});
+
+client.on("error", (error) => {
+  console.error("❌ Discord client error:", error);
 });
 
 client.on("messageCreate", async (message) => {
@@ -494,23 +503,49 @@ app.get("/send-protection", async (req, res) => {
 // ----------------------
 async function startApp() {
   console.log("🚀 Starting Crusty Webhook Manager...");
+  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+  // Check if BOT_TOKEN exists
+  if (!BOT_TOKEN) {
+    console.error("❌ FATAL ERROR: Bot token (TKN) not found in .env file!");
+    console.error("❌ Please add TKN=your_bot_token to your .env file");
+    process.exit(1);
+  }
 
   // 1. Start Express server
   app.listen(PORT, () => {
-    console.log(`✅ Express server running on port ${PORT}`);
+    console.log(`✅ Express server running on http://localhost:${PORT}`);
   });
 
   // 2. Load webhooks from .env file
+  console.log("📂 Loading webhooks from .env file...");
   await loadFromEnv();
 
   // 3. Login to Discord
+  console.log("🔐 Logging into Discord...");
   try {
     await client.login(BOT_TOKEN);
+    console.log("⏳ Waiting for Discord bot to be ready...");
   } catch (err) {
-    console.error("❌ Discord login error:", err);
+    console.error("❌ Discord login error:", err.message);
+    console.error("❌ Please check if your bot token is valid!");
     process.exit(1);
   }
 }
 
+// Handle process termination
+process.on('SIGINT', () => {
+  console.log("\n⚠️ Shutting down Crusty Webhook Manager...");
+  client.destroy();
+  process.exit(0);
+});
+
+process.on('unhandledRejection', (error) => {
+  console.error('❌ Unhandled promise rejection:', error);
+});
+
 // Start the application
-startApp();
+startApp().catch((error) => {
+  console.error("❌ Fatal error during startup:", error);
+  process.exit(1);
+});
