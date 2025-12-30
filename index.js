@@ -528,20 +528,6 @@ app.get("/send-protection", async (req, res) => {
   }
 });
 
-// ----------------------
-// Webhook List Endpoint
-// ----------------------
-app.get("/webhook-list/:key", (req, res) => {
-  const { key } = req.params;
-  if (key !== LIST_KEY) return res.status(401).json({ error: "Invalid key" });
-
-  const list = [];
-  for (const [id, url] of webhooks.entries()) {
-    list.push({ id, url });
-  }
-
-  res.json(list);
-});
 
 // ----------------------
 // Startup Sequence
