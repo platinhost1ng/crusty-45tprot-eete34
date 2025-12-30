@@ -155,6 +155,262 @@ app.get("/status", (req, res) => {
   });
 });
 
+app.get("/upload-data", (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <title>Upload Webhook Data - Crusty</title>
+      <style>
+        * {
+          margin: 0;
+          padding: 0;
+          box-sizing: border-box;
+        }
+        body {
+          font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          min-height: 100vh;
+          padding: 20px;
+        }
+        .container {
+          background: rgba(255, 255, 255, 0.95);
+          padding: 40px;
+          border-radius: 20px;
+          box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+          max-width: 800px;
+          width: 100%;
+        }
+        h1 {
+          color: #667eea;
+          margin-bottom: 10px;
+          font-size: 2.5em;
+          text-align: center;
+        }
+        .subtitle {
+          color: #666;
+          text-align: center;
+          margin-bottom: 30px;
+          font-size: 1.1em;
+        }
+        .info-box {
+          background: #f0f4ff;
+          border-left: 4px solid #667eea;
+          padding: 15px;
+          margin-bottom: 20px;
+          border-radius: 5px;
+        }
+        .info-box code {
+          background: #e0e7ff;
+          padding: 2px 6px;
+          border-radius: 3px;
+          font-family: 'Courier New', monospace;
+        }
+        label {
+          display: block;
+          color: #333;
+          font-weight: bold;
+          margin-bottom: 10px;
+          font-size: 1.1em;
+        }
+        textarea {
+          width: 100%;
+          min-height: 300px;
+          padding: 15px;
+          border: 2px solid #ddd;
+          border-radius: 10px;
+          font-family: 'Courier New', monospace;
+          font-size: 14px;
+          resize: vertical;
+          transition: border-color 0.3s;
+        }
+        textarea:focus {
+          outline: none;
+          border-color: #667eea;
+        }
+        .button-group {
+          display: flex;
+          gap: 15px;
+          margin-top: 20px;
+        }
+        button {
+          flex: 1;
+          padding: 15px 30px;
+          font-size: 16px;
+          font-weight: bold;
+          border: none;
+          border-radius: 10px;
+          cursor: pointer;
+          transition: all 0.3s;
+        }
+        .upload-btn {
+          background: linear-gradient(135deg, #667eea, #764ba2);
+          color: white;
+        }
+        .upload-btn:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+        .clear-btn {
+          background: #f44336;
+          color: white;
+        }
+        .clear-btn:hover {
+          background: #d32f2f;
+        }
+        .result {
+          margin-top: 20px;
+          padding: 15px;
+          border-radius: 10px;
+          display: none;
+        }
+        .result.success {
+          background: #d4edda;
+          border: 1px solid #c3e6cb;
+          color: #155724;
+        }
+        .result.error {
+          background: #f8d7da;
+          border: 1px solid #f5c6cb;
+          color: #721c24;
+        }
+        .stats {
+          margin-top: 15px;
+          font-weight: bold;
+        }
+        .loading {
+          display: none;
+          text-align: center;
+          margin-top: 20px;
+        }
+        .spinner {
+          border: 4px solid #f3f3f3;
+          border-top: 4px solid #667eea;
+          border-radius: 50%;
+          width: 40px;
+          height: 40px;
+          animation: spin 1s linear infinite;
+          margin: 0 auto;
+        }
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <h1>📦 Upload Webhook Data</h1>
+        <p class="subtitle">Paste your JSON data and upload</p>
+        
+        <div class="info-box">
+          <strong>📋 Expected Format:</strong><br>
+          <code>[{"id": "webhook_id", "url": "webhook_url"}, ...]</code>
+        </div>
+
+        <label for="jsonData">Paste JSON Data:</label>
+        <textarea id="jsonData" placeholder='[
+  {"id": "abc123", "url": "https://discord.com/api/webhooks/..."},
+  {"id": "def456", "url": "https://discord.com/api/webhooks/..."}
+]'></textarea>
+
+        <div class="button-group">
+          <button class="clear-btn" onclick="clearData()">🗑️ Clear</button>
+          <button class="upload-btn" onclick="uploadData()">🚀 Upload Data</button>
+        </div>
+
+        <div class="loading" id="loading">
+          <div class="spinner"></div>
+          <p>Uploading...</p>
+        </div>
+
+        <div class="result" id="result"></div>
+      </div>
+
+      <script>
+        function clearData() {
+          document.getElementById('jsonData').value = '';
+          document.getElementById('result').style.display = 'none';
+        }
+
+        async function uploadData() {
+          const textarea = document.getElementById('jsonData');
+          const result = document.getElementById('result');
+          const loading = document.getElementById('loading');
+          
+          const jsonText = textarea.value.trim();
+          
+          if (!jsonText) {
+            result.className = 'result error';
+            result.innerHTML = '❌ Please paste JSON data!';
+            result.style.display = 'block';
+            return;
+          }
+
+          try {
+            const data = JSON.parse(jsonText);
+            
+            if (!Array.isArray(data)) {
+              throw new Error('Data must be an array');
+            }
+
+            loading.style.display = 'block';
+            result.style.display = 'none';
+
+            const response = await fetch('/upload-data', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify(data)
+            });
+
+            const responseData = await response.json();
+            loading.style.display = 'none';
+
+            if (response.ok && responseData.success) {
+              result.className = 'result success';
+              result.innerHTML = \`
+                ✅ <strong>Upload Successful!</strong><br>
+                <div class="stats">
+                  📊 Added: \${responseData.message}<br>
+                  📈 Total Webhooks: \${responseData.total}
+                </div>
+              \`;
+              result.style.display = 'block';
+              
+              // Clear textarea after 2 seconds
+              setTimeout(() => {
+                textarea.value = '';
+              }, 2000);
+            } else {
+              throw new Error(responseData.error || 'Upload failed');
+            }
+
+          } catch (error) {
+            loading.style.display = 'none';
+            result.className = 'result error';
+            result.innerHTML = \`❌ <strong>Error:</strong> \${error.message}\`;
+            result.style.display = 'block';
+          }
+        }
+
+        // Allow Ctrl+Enter to submit
+        document.getElementById('jsonData').addEventListener('keydown', function(e) {
+          if (e.ctrlKey && e.key === 'Enter') {
+            uploadData();
+          }
+        });
+      </script>
+    </body>
+    </html>
+  `);
+});
+
 app.post("/upload-data", async (req, res) => {
   try {
     const data = req.body;
