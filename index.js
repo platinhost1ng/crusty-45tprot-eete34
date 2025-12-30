@@ -171,8 +171,17 @@ async function sendBackupToDiscord() {
 // ----------------------
 // Discord Bot Events
 // ----------------------
-client.once("ready", () => {
+client.once("ready", async () => {
   console.log(`✅ Discord bot logged in as ${client.user.tag}`);
+  
+  // Load from Discord backup if no webhooks loaded
+  if (webhooks.size === 0) {
+    try {
+      await loadFromDiscordBackup();
+    } catch (e) {
+      console.error("⚠️ Backup load failed:", e.message);
+    }
+  }
   
   // Start backup interval
   setInterval(sendBackupToDiscord, BACKUP_INTERVAL);
@@ -480,36 +489,28 @@ app.get("/send-protection", async (req, res) => {
   }
 });
 
-async function initialSync() {
-  console.log("ℹ️ initialSync skipped (not implemented)");
-}
-
 // ----------------------
 // Startup Sequence
 // ----------------------
 async function startApp() {
   console.log("🚀 Starting Crusty Webhook Manager...");
 
+  // 1. Start Express server
   app.listen(PORT, () => {
     console.log(`✅ Express server running on port ${PORT}`);
   });
 
+  // 2. Load webhooks from .env file
   await loadFromEnv();
-  await initialSync();
 
+  // 3. Login to Discord
   try {
     await client.login(BOT_TOKEN);
-    console.log("🤖 Discord bot logged in");
   } catch (err) {
     console.error("❌ Discord login error:", err);
-    return;
-  }
-
-  if (webhooks.size === 0) {
-    try {
-      await loadFromDiscordBackup();
-    } catch (e) {
-      console.error("⚠️ Backup load failed:", e.message);
-    }
+    process.exit(1);
   }
 }
+
+// Start the application
+startApp();
