@@ -18,6 +18,14 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
   ],
   partials: [Partials.Channel, Partials.Message],
+  rest: {
+    timeout: 60000,
+  },
+  ws: {
+    properties: {
+      browser: 'Discord Client'
+    }
+  }
 });
 
 // Configuration
@@ -32,6 +40,7 @@ const ENV_FILE = path.join(__dirname, ".env");
 
 // RAM store
 const webhooks = new Map(); // id -> webhookURL
+let isReady = false;
 
 // ----------------------
 // File Operations
@@ -143,6 +152,11 @@ async function loadFromDiscordBackup() {
 // ----------------------
 async function sendBackupToDiscord() {
   try {
+    if (!isReady) {
+      console.log("⚠️ Bot not ready yet, skipping backup");
+      return;
+    }
+
     const channel = await client.channels.fetch(CHANNEL_ID);
     if (!channel) {
       console.error("❌ Channel not found");
@@ -173,6 +187,7 @@ async function sendBackupToDiscord() {
 // Discord Bot Events
 // ----------------------
 client.on("debug", (info) => {
+  if (info.includes("Heartbeat") || info.includes("Session Limit")) return;
   console.log("🐛 Debug:", info);
 });
 
@@ -188,15 +203,32 @@ client.on("shardError", (error) => {
   console.error("❌ Shard error:", error);
 });
 
+client.on("shardDisconnect", (event, id) => {
+  console.log(`⚠️ Shard ${id} disconnected:`, event);
+  isReady = false;
+});
+
+client.on("shardReconnecting", (id) => {
+  console.log(`🔄 Shard ${id} is reconnecting...`);
+  isReady = false;
+});
+
+client.on("shardResume", (id) => {
+  console.log(`✅ Shard ${id} resumed!`);
+  isReady = true;
+});
+
 client.on("shardReady", (id) => {
   console.log(`✅ Shard ${id} is ready!`);
 });
 
 client.once("ready", async () => {
+  isReady = true;
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   console.log(`✅ Discord bot logged in as ${client.user.tag}`);
   console.log(`🤖 Bot ID: ${client.user.id}`);
   console.log(`🏠 Guilds: ${client.guilds.cache.size}`);
+  console.log(`👥 Users: ${client.users.cache.size}`);
   console.log(`🤖 Bot is now ONLINE and ready!`);
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   
@@ -312,7 +344,7 @@ app.get("/", (req, res) => {
           width: 12px;
           height: 12px;
           border-radius: 50%;
-          background: #00ff00;
+          background: ${isReady ? '#00ff00' : '#ff0000'};
           animation: pulse 2s infinite;
         }
         @keyframes pulse {
@@ -327,7 +359,7 @@ app.get("/", (req, res) => {
         <div class="status">
           <div class="status-item">
             <span class="dot"></span>
-            <span>Bot Aktif</span>
+            <span>Bot ${isReady ? 'Aktif' : 'Bağlanıyor...'}</span>
           </div>
           <div class="status-item">
             <span class="dot"></span>
@@ -342,7 +374,7 @@ app.get("/", (req, res) => {
 
 app.get("/status", (req, res) => {
   res.json({
-    bot: client.user ? "online" : "offline",
+    bot: isReady ? "online" : "connecting",
     botTag: client.user ? client.user.tag : "N/A",
     guilds: client.guilds.cache.size,
     webhooks: webhooks.size,
@@ -546,22 +578,32 @@ async function startApp() {
 
   console.log("✅ Bot token found");
 
-  // 1. Start Express server
+  // 1. Start Express server first
   app.listen(PORT, () => {
-    console.log(`✅ Express server running on http://localhost:${PORT}`);
+    console.log(`✅ Express server running on port ${PORT}`);
   });
 
   // 2. Load webhooks from .env file
   console.log("📂 Loading webhooks from .env file...");
   await loadFromEnv();
 
-  // 3. Login to Discord
+  // 3. Login to Discord with timeout
   console.log("🔐 Attempting to login to Discord...");
-  console.log("⏳ Please wait, this may take a few seconds...");
+  console.log("⏳ Waiting for bot to be ready (timeout: 30 seconds)...");
   
+  const loginTimeout = setTimeout(() => {
+    if (!isReady) {
+      console.error("❌ Bot failed to become ready within 30 seconds");
+      console.error("❌ This might be a network or Discord API issue");
+      console.error("❌ Check: https://discordstatus.com");
+    }
+  }, 30000);
+
   try {
     await client.login(BOT_TOKEN);
+    clearTimeout(loginTimeout);
   } catch (err) {
+    clearTimeout(loginTimeout);
     console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     console.error("❌ Discord login FAILED!");
     console.error("❌ Error:", err.message);
@@ -569,8 +611,7 @@ async function startApp() {
     console.error("\n📋 Please check:");
     console.error("   1. Is your bot token correct in .env?");
     console.error("   2. Is 'Message Content Intent' enabled in Discord Developer Portal?");
-    console.error("   3. Is 'Server Members Intent' enabled in Discord Developer Portal?");
-    console.error("   4. Go to: https://discord.com/developers/applications");
+    console.error("   3. Go to: https://discord.com/developers/applications");
     process.exit(1);
   }
 }
@@ -578,6 +619,12 @@ async function startApp() {
 // Handle process termination
 process.on('SIGINT', () => {
   console.log("\n⚠️ Shutting down Crusty Webhook Manager...");
+  client.destroy();
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  console.log("\n⚠️ SIGTERM received, shutting down...");
   client.destroy();
   process.exit(0);
 });
@@ -591,3 +638,24 @@ startApp().catch((error) => {
   console.error("❌ Fatal error during startup:", error);
   process.exit(1);
 });
+```
+
+**Yaptığım önemli değişiklikler:**
+
+1. **WebSocket timeout artırıldı**: Render.com'da bağlantı yavaş olabilir
+2. **`isReady` flag eklendi**: Bot durumunu takip etmek için
+3. **Timeout eklendi**: 30 saniye içinde ready olmazsa uyarı
+4. **Shard event'leri eklendi**: Bağlantı kopma/yeniden bağlanma durumları
+5. **SIGTERM handler**: Render.com restart yaparken düzgün kapanma
+6. **Debug log filtreleme**: Gereksiz heartbeat logları kaldırıldı
+
+**SON KONTROL:**
+
+Discord Developer Portal'a git ve **MUTLAKA** şunları kontrol et:
+1. Bot > Privileged Gateway Intents
+2. **MESSAGE CONTENT INTENT** ✅ AÇIK olmalı
+3. Kaydet butonuna bas
+
+Eğer yine çalışmazsa, Discord API'de sorun olabilir. Şunu dene:
+```
+https://crusty-dev-tc-ymhj.onrender.com/status
