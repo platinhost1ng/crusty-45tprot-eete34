@@ -490,23 +490,26 @@ async function initialSync() {
 async function startApp() {
   console.log("🚀 Starting Crusty Webhook Manager...");
 
-  // EXPRESS ÖNCE
   app.listen(PORT, () => {
     console.log(`✅ Express server running on port ${PORT}`);
   });
 
-  // SONRA BOT & DİĞER İŞLER
   await loadFromEnv();
   await initialSync();
 
+  try {
+    await client.login(BOT_TOKEN);
+    console.log("🤖 Discord bot logged in");
+  } catch (err) {
+    console.error("❌ Discord login error:", err);
+    return;
+  }
+
   if (webhooks.size === 0) {
-    console.log("⚠️ No webhooks found, checking Discord backup...");
-    await client.login(BOT_TOKEN);
-    await new Promise(r => setTimeout(r, 3000));
-    await loadFromDiscordBackup();
-  } else {
-    await client.login(BOT_TOKEN);
+    try {
+      await loadFromDiscordBackup();
+    } catch (e) {
+      console.error("⚠️ Backup load failed:", e.message);
+    }
   }
 }
-
-startApp().catch(console.error);
