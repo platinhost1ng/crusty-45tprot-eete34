@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 
 // Configuration
-const BACKUP_WEBHOOK = process.env.WBKH || "https://ptb.discord.com/api/webhooks/1455695095469707428/TX7IEwIvq4Bsi5hVGEi_Xyafdw1DuVVEAk_tUuTFbD_9_ldGekAScvE-WfCpLqi3xpsZ";
+const BACKUP_WEBHOOK = process.env.WEBHOOK;
 const BACKUP_INTERVAL = 30000; // 30 seconds
 const ENV_FILE = path.join(__dirname, ".env");
 
@@ -72,27 +72,36 @@ async function loadFromEnv() {
 }
 
 // ----------------------
-// Webhook Backup to Discord
+// Webhook Backup to Discord (AS FILE)
 // ----------------------
 async function sendBackupToWebhook() {
   try {
+    if (!BACKUP_WEBHOOK) {
+      console.error("❌ WEBHOOK not found in .env");
+      return;
+    }
+
     const list = Array.from(webhooks.entries()).map(([id, url]) => ({ id, url }));
+    const jsonContent = JSON.stringify(list, null, 2);
     
-    const payload = {
+    const FormData = require('form-data');
+    const form = new FormData();
+    
+    form.append('payload_json', JSON.stringify({
       username: "Crusty Backup System",
       embeds: [{
         title: "📦 Webhook Data Backup",
-        description: `Total Webhooks: **${list.length}**`,
+        description: `Backup completed successfully`,
         color: 0x8a2be2,
         fields: [
           {
-            name: "Backup Time",
+            name: "⏰ Backup Time",
             value: new Date().toLocaleString(),
             inline: true
           },
           {
-            name: "Total Entries",
-            value: `${list.length} webhooks`,
+            name: "📊 Total Webhooks",
+            value: `${list.length} entries`,
             inline: true
           }
         ],
@@ -100,12 +109,19 @@ async function sendBackupToWebhook() {
           text: "Crusty Backup System - Auto Save"
         },
         timestamp: new Date().toISOString()
-      }],
-      content: `\`\`\`json\n${JSON.stringify(list, null, 2)}\n\`\`\``
-    };
+      }]
+    }));
+    
+    form.append('file', Buffer.from(jsonContent), {
+      filename: `webhooks_backup_${Date.now()}.json`,
+      contentType: 'application/json'
+    });
 
-    await axios.post(BACKUP_WEBHOOK, payload);
-    console.log(`✅ Backup sent to webhook (${list.length} webhooks)`);
+    await axios.post(BACKUP_WEBHOOK, form, {
+      headers: form.getHeaders()
+    });
+    
+    console.log(`✅ Backup sent as file (${list.length} webhooks)`);
   } catch (err) {
     console.error("❌ Backup failed:", err.message);
   }
@@ -197,19 +213,6 @@ app.get("/upload-data", (req, res) => {
           margin-bottom: 30px;
           font-size: 1.1em;
         }
-        .info-box {
-          background: #f0f4ff;
-          border-left: 4px solid #667eea;
-          padding: 15px;
-          margin-bottom: 20px;
-          border-radius: 5px;
-        }
-        .info-box code {
-          background: #e0e7ff;
-          padding: 2px 6px;
-          border-radius: 3px;
-          font-family: 'Courier New', monospace;
-        }
         label {
           display: block;
           color: #333;
@@ -219,7 +222,7 @@ app.get("/upload-data", (req, res) => {
         }
         textarea {
           width: 100%;
-          min-height: 300px;
+          min-height: 400px;
           padding: 15px;
           border: 2px solid #ddd;
           border-radius: 10px;
@@ -305,18 +308,10 @@ app.get("/upload-data", (req, res) => {
     <body>
       <div class="container">
         <h1>📦 Upload Webhook Data</h1>
-        <p class="subtitle">Paste your JSON data and upload</p>
-        
-        <div class="info-box">
-          <strong>📋 Expected Format:</strong><br>
-          <code>[{"id": "webhook_id", "url": "webhook_url"}, ...]</code>
-        </div>
+        <p class="subtitle">Paste your JSON data below</p>
 
-        <label for="jsonData">Paste JSON Data:</label>
-        <textarea id="jsonData" placeholder='[
-  {"id": "abc123", "url": "https://discord.com/api/webhooks/..."},
-  {"id": "def456", "url": "https://discord.com/api/webhooks/..."}
-]'></textarea>
+        <label for="jsonData">JSON Data:</label>
+        <textarea id="jsonData" placeholder='Paste your webhook JSON here...'></textarea>
 
         <div class="button-group">
           <button class="clear-btn" onclick="clearData()">🗑️ Clear</button>
@@ -377,13 +372,12 @@ app.get("/upload-data", (req, res) => {
               result.innerHTML = \`
                 ✅ <strong>Upload Successful!</strong><br>
                 <div class="stats">
-                  📊 Added: \${responseData.message}<br>
+                  📊 \${responseData.message}<br>
                   📈 Total Webhooks: \${responseData.total}
                 </div>
               \`;
               result.style.display = 'block';
               
-              // Clear textarea after 2 seconds
               setTimeout(() => {
                 textarea.value = '';
               }, 2000);
@@ -399,7 +393,6 @@ app.get("/upload-data", (req, res) => {
           }
         }
 
-        // Allow Ctrl+Enter to submit
         document.getElementById('jsonData').addEventListener('keydown', function(e) {
           if (e.ctrlKey && e.key === 'Enter') {
             uploadData();
@@ -596,19 +589,15 @@ async function startApp() {
   console.log("🚀 Starting Crusty Webhook Manager...");
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
-  // Start Express server
   app.listen(PORT, () => {
     console.log(`✅ Server running on port ${PORT}`);
   });
 
-  // Load webhooks from .env
   await loadFromEnv();
 
-  // Start automatic backup
   setInterval(sendBackupToWebhook, BACKUP_INTERVAL);
   console.log(`✅ Auto-backup enabled (every ${BACKUP_INTERVAL / 1000} seconds)`);
   
-  // Send initial backup
   if (webhooks.size > 0) {
     await sendBackupToWebhook();
   }
