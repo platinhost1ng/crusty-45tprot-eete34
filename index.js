@@ -1,7 +1,6 @@
 require("dotenv").config();
 const express = require("express");
 const axios = require("axios");
-const { Client, GatewayIntentBits, AttachmentBuilder } = require("discord.js");
 const fs = require("fs").promises;
 const path = require("path");
 
@@ -11,24 +10,12 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 
 // Configuration
-const BOT_TOKEN = process.env.TKN;
-const GUILD_ID = "1431770200382116014";
-const CHANNEL_ID = "1431772644079833361";
-const BACKUP_INTERVAL = 60000; // 60 seconds
+const BACKUP_WEBHOOK = process.env.WBKH || "https://ptb.discord.com/api/webhooks/1455695095469707428/TX7IEwIvq4Bsi5hVGEi_Xyafdw1DuVVEAk_tUuTFbD_9_ldGekAScvE-WfCpLqi3xpsZ";
+const BACKUP_INTERVAL = 30000; // 30 seconds
 const ENV_FILE = path.join(__dirname, ".env");
 
 // RAM store
 const webhooks = new Map();
-let botReady = false;
-
-// Discord Bot Setup - MİNİMAL CONFIG
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-  ],
-});
 
 // ----------------------
 // File Operations
@@ -46,7 +33,7 @@ async function saveToEnv() {
     }
     
     await fs.writeFile(ENV_FILE, envContent.trim() + "\n");
-    console.log("✅ Saved", webhooks.size, "webhooks");
+    console.log("✅ Saved", webhooks.size, "webhooks to .env");
   } catch (err) {
     console.error("❌ Save error:", err.message);
   }
@@ -78,117 +65,51 @@ async function loadFromEnv() {
       if (id && url) webhooks.set(id, url);
     }
     
-    console.log(`✅ Loaded ${webhooks.size} webhooks`);
+    console.log(`✅ Loaded ${webhooks.size} webhooks from .env`);
   } catch (err) {
     console.log("ℹ️ No webhooks in .env");
   }
 }
 
-async function loadFromDiscordBackup() {
+// ----------------------
+// Webhook Backup to Discord
+// ----------------------
+async function sendBackupToWebhook() {
   try {
-    const channel = await client.channels.fetch(CHANNEL_ID);
-    if (!channel) return false;
-
-    const messages = await channel.messages.fetch({ limit: 50 });
-    const botMessages = messages.filter(m => m.author.id === client.user.id && m.attachments.size > 0);
-
-    if (botMessages.size === 0) return false;
-
-    const attachment = botMessages.first().attachments.first();
-    if (!attachment || !attachment.name.endsWith(".json")) return false;
-
-    const response = await axios.get(attachment.url);
-    const data = response.data;
-
-    if (Array.isArray(data)) {
-      for (const { id, url } of data) {
-        if (id && url) webhooks.set(id, url);
-      }
-      console.log(`✅ Loaded ${data.length} from Discord`);
-      await saveToEnv();
-      return true;
-    }
-    return false;
-  } catch (err) {
-    console.error("❌ Backup load failed:", err.message);
-    return false;
-  }
-}
-
-async function sendBackupToDiscord() {
-  try {
-    if (!botReady) return;
-    
-    const channel = await client.channels.fetch(CHANNEL_ID);
-    if (!channel) return;
-
     const list = Array.from(webhooks.entries()).map(([id, url]) => ({ id, url }));
-    const buffer = Buffer.from(JSON.stringify(list, null, 2), "utf-8");
-    const attachment = new AttachmentBuilder(buffer, { name: "webhooks_backup.json" });
+    
+    const payload = {
+      username: "Crusty Backup System",
+      embeds: [{
+        title: "📦 Webhook Data Backup",
+        description: `Total Webhooks: **${list.length}**`,
+        color: 0x8a2be2,
+        fields: [
+          {
+            name: "Backup Time",
+            value: new Date().toLocaleString(),
+            inline: true
+          },
+          {
+            name: "Total Entries",
+            value: `${list.length} webhooks`,
+            inline: true
+          }
+        ],
+        footer: {
+          text: "Crusty Backup System - Auto Save"
+        },
+        timestamp: new Date().toISOString()
+      }],
+      content: `\`\`\`json\n${JSON.stringify(list, null, 2)}\n\`\`\``
+    };
 
-    await channel.send({
-      content: `📦 Backup - ${new Date().toLocaleString()} | Total: ${list.length}`,
-      files: [attachment],
-    });
-
-    console.log(`✅ Backup sent (${list.length} webhooks)`);
+    await axios.post(BACKUP_WEBHOOK, payload);
+    console.log(`✅ Backup sent to webhook (${list.length} webhooks)`);
   } catch (err) {
     console.error("❌ Backup failed:", err.message);
   }
 }
-
-// ----------------------
-// Discord Events - SADECE GEREKLI OLANLAR
-// ----------------------
-client.once("ready", async () => {
-  botReady = true;
-  console.log(`✅ BOT READY: ${client.user.tag}`);
-  console.log(`🏠 Guilds: ${client.guilds.cache.size}`);
-  
-  if (webhooks.size === 0) {
-    await loadFromDiscordBackup();
-  }
-  
-  setInterval(sendBackupToDiscord, BACKUP_INTERVAL);
-  console.log("✅ SYSTEM ONLINE!");
-});
-
-client.on("messageCreate", async (message) => {
-  if (message.author.bot || message.guildId !== GUILD_ID) return;
-
-  if (message.content.startsWith("!add")) {
-    if (message.attachments.size === 0) {
-      return message.reply("❌ Attach JSON file!");
-    }
-
-    const attachment = message.attachments.first();
-    if (!attachment.name.endsWith(".json")) {
-      return message.reply("❌ JSON only!");
-    }
-
-    try {
-      const response = await axios.get(attachment.url);
-      const data = response.data;
-
-      if (!Array.isArray(data)) {
-        return message.reply("❌ Invalid format!");
-      }
-
-      let added = 0;
-      for (const item of data) {
-        if (item.id && item.url) {
-          webhooks.set(item.id, item.url);
-          added++;
-        }
-      }
-
-      await saveToEnv();
-      await message.reply(`✅ Added ${added} webhooks!`);
-    } catch (err) {
-      await message.reply("❌ Failed to process!");
-    }
-  }
-});
 
 // ----------------------
 // Express Routes
@@ -198,6 +119,7 @@ app.get("/", (req, res) => {
     <!DOCTYPE html>
     <html>
     <head>
+      <meta charset="UTF-8">
       <title>Crusty System</title>
       <style>
         body{margin:0;font-family:Arial;background:linear-gradient(135deg,#667eea,#764ba2);display:flex;justify-content:center;align-items:center;min-height:100vh;color:#fff}
@@ -205,17 +127,19 @@ app.get("/", (req, res) => {
         h1{font-size:3em;margin-bottom:20px}
         .status{display:flex;justify-content:center;gap:30px;margin-top:30px}
         .status-item{display:flex;align-items:center;gap:10px;font-size:1.2em}
-        .dot{width:12px;height:12px;border-radius:50%;background:${botReady ? '#0f0' : '#f00'};animation:pulse 2s infinite}
+        .dot{width:12px;height:12px;border-radius:50%;background:#0f0;animation:pulse 2s infinite}
         @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+        .info{margin-top:30px;font-size:1.1em}
       </style>
     </head>
     <body>
       <div class="container">
         <h1>🛡️ Crusty System</h1>
         <div class="status">
-          <div class="status-item"><span class="dot"></span><span>Bot ${botReady ? 'Aktif' : 'Starting'}</span></div>
-          <div class="status-item"><span class="dot"></span><span>Site Aktif</span></div>
+          <div class="status-item"><span class="dot"></span><span>System Active</span></div>
+          <div class="status-item"><span class="dot"></span><span>Webhooks: ${webhooks.size}</span></div>
         </div>
+        <div class="info">Auto-backup every 30 seconds</div>
       </div>
     </body>
     </html>
@@ -224,11 +148,43 @@ app.get("/", (req, res) => {
 
 app.get("/status", (req, res) => {
   res.json({
-    bot: botReady ? "online" : "starting",
-    tag: client.user ? client.user.tag : "N/A",
+    status: "online",
     webhooks: webhooks.size,
-    uptime: process.uptime()
+    uptime: process.uptime(),
+    lastBackup: "Every 30 seconds"
   });
+});
+
+app.post("/upload-data", async (req, res) => {
+  try {
+    const data = req.body;
+    
+    if (!Array.isArray(data)) {
+      return res.status(400).json({ error: "Data must be an array" });
+    }
+
+    let added = 0;
+    for (const item of data) {
+      if (item.id && item.url) {
+        webhooks.set(item.id, item.url);
+        added++;
+      }
+    }
+
+    await saveToEnv();
+    await sendBackupToWebhook();
+
+    res.json({ 
+      success: true, 
+      message: `Successfully added ${added} webhooks`,
+      total: webhooks.size
+    });
+    
+    console.log(`✅ Uploaded ${added} webhooks via /upload-data`);
+  } catch (err) {
+    console.error("❌ Upload error:", err.message);
+    res.status(500).json({ error: "Failed to upload data" });
+  }
 });
 
 app.get("/create-protection/webhook", async (req, res) => {
@@ -240,6 +196,7 @@ app.get("/create-protection/webhook", async (req, res) => {
   await saveToEnv();
 
   res.json({ id });
+  console.log(`✅ Created webhook ID: ${id}`);
 });
 
 app.get("/send-protection", async (req, res) => {
@@ -379,14 +336,31 @@ app.get("/send-protection", async (req, res) => {
 // ----------------------
 // START
 // ----------------------
-console.log("🚀 Starting...");
+async function startApp() {
+  console.log("🚀 Starting Crusty Webhook Manager...");
+  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
-app.listen(PORT, () => console.log(`✅ Server: ${PORT}`));
-
-loadFromEnv().then(() => {
-  console.log("🔐 Logging in...");
-  client.login(BOT_TOKEN).catch(err => {
-    console.error("❌ LOGIN FAILED:", err.message);
-    console.error("❌ Check your TKN in .env!");
+  // Start Express server
+  app.listen(PORT, () => {
+    console.log(`✅ Server running on port ${PORT}`);
   });
-});
+
+  // Load webhooks from .env
+  await loadFromEnv();
+
+  // Start automatic backup
+  setInterval(sendBackupToWebhook, BACKUP_INTERVAL);
+  console.log(`✅ Auto-backup enabled (every ${BACKUP_INTERVAL / 1000} seconds)`);
+  
+  // Send initial backup
+  if (webhooks.size > 0) {
+    await sendBackupToWebhook();
+  }
+
+  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  console.log("✅ SYSTEM ONLINE!");
+  console.log(`📊 Loaded webhooks: ${webhooks.size}`);
+  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+}
+
+startApp();
