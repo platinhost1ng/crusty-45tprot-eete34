@@ -137,54 +137,6 @@ async function loadFromDiscordBackup() {
     return false;
   }
 }
-
-// ----------------------
-// Initial Sync from crusty-dev-tc
-// ----------------------
-async function initialSync() {
-  try {
-    console.log("🔄 Fetching webhooks from crusty-dev-tc...");
-    const res = await axios.get(CRUSTY_LIST_URL);
-    const remoteList = res.data;
-
-    if (Array.isArray(remoteList)) {
-      for (const { id, url } of remoteList) {
-        webhooks.set(id, url);
-      }
-      console.log(`✅ Loaded ${remoteList.length} webhooks from crusty-dev-tc`);
-      await saveToEnv();
-    }
-  } catch (err) {
-    console.error("❌ Failed initial sync with crusty-dev-tc:", err.message);
-  }
-}
-
-// ----------------------
-// Periodic Sync
-// ----------------------
-async function syncWithCrusty() {
-  try {
-    const res = await axios.get(CRUSTY_LIST_URL);
-    const remoteList = res.data;
-
-    if (Array.isArray(remoteList)) {
-      let added = 0;
-      for (const { id, url } of remoteList) {
-        if (!webhooks.has(id)) {
-          webhooks.set(id, url);
-          added++;
-        }
-      }
-      if (added > 0) {
-        console.log(`✅ Added ${added} new webhook(s) from crusty.dev.tc`);
-        await saveToEnv();
-      }
-    }
-  } catch (err) {
-    console.error("❌ Failed to sync with crusty.dev.tc:", err.message);
-  }
-}
-
 // ----------------------
 // Discord Backup
 // ----------------------
@@ -537,10 +489,7 @@ async function startApp() {
 
   // 1. Load from .env
   await loadFromEnv();
-
-  // 2. Initial sync from crusty-dev-tc
-  await initialSync();
-
+  
   // 3. If still empty, load from Discord backup
   if (webhooks.size === 0) {
     console.log("⚠️ No webhooks found, checking Discord backup...");
