@@ -1,7 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const axios = require("axios");
-const { Client, GatewayIntentBits, AttachmentBuilder } = require("discord.js");
+const { Client, GatewayIntentBits, Partials, AttachmentBuilder } = require("discord.js");
 const fs = require("fs").promises;
 const path = require("path");
 
@@ -17,6 +17,7 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
   ],
+  partials: [Partials.Channel, Partials.Message],
 });
 
 // Configuration
@@ -171,9 +172,33 @@ async function sendBackupToDiscord() {
 // ----------------------
 // Discord Bot Events
 // ----------------------
+client.on("debug", (info) => {
+  console.log("🐛 Debug:", info);
+});
+
+client.on("warn", (info) => {
+  console.log("⚠️ Warning:", info);
+});
+
+client.on("error", (error) => {
+  console.error("❌ Discord client error:", error);
+});
+
+client.on("shardError", (error) => {
+  console.error("❌ Shard error:", error);
+});
+
+client.on("shardReady", (id) => {
+  console.log(`✅ Shard ${id} is ready!`);
+});
+
 client.once("ready", async () => {
+  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   console.log(`✅ Discord bot logged in as ${client.user.tag}`);
+  console.log(`🤖 Bot ID: ${client.user.id}`);
+  console.log(`🏠 Guilds: ${client.guilds.cache.size}`);
   console.log(`🤖 Bot is now ONLINE and ready!`);
+  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   
   // Load from Discord backup if no webhooks loaded
   if (webhooks.size === 0) {
@@ -190,10 +215,6 @@ client.once("ready", async () => {
   // Start backup interval
   setInterval(sendBackupToDiscord, BACKUP_INTERVAL);
   console.log(`✅ Backup interval started (every ${BACKUP_INTERVAL / 1000} seconds)`);
-});
-
-client.on("error", (error) => {
-  console.error("❌ Discord client error:", error);
 });
 
 client.on("messageCreate", async (message) => {
@@ -318,6 +339,17 @@ app.get("/", (req, res) => {
     </html>
   `);
 });
+
+app.get("/status", (req, res) => {
+  res.json({
+    bot: client.user ? "online" : "offline",
+    botTag: client.user ? client.user.tag : "N/A",
+    guilds: client.guilds.cache.size,
+    webhooks: webhooks.size,
+    uptime: process.uptime()
+  });
+});
+
 /**
  * Create Protection
  * Registers a webhook URL and returns a unique ID
@@ -512,6 +544,8 @@ async function startApp() {
     process.exit(1);
   }
 
+  console.log("✅ Bot token found");
+
   // 1. Start Express server
   app.listen(PORT, () => {
     console.log(`✅ Express server running on http://localhost:${PORT}`);
@@ -522,13 +556,21 @@ async function startApp() {
   await loadFromEnv();
 
   // 3. Login to Discord
-  console.log("🔐 Logging into Discord...");
+  console.log("🔐 Attempting to login to Discord...");
+  console.log("⏳ Please wait, this may take a few seconds...");
+  
   try {
     await client.login(BOT_TOKEN);
-    console.log("⏳ Waiting for Discord bot to be ready...");
   } catch (err) {
-    console.error("❌ Discord login error:", err.message);
-    console.error("❌ Please check if your bot token is valid!");
+    console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    console.error("❌ Discord login FAILED!");
+    console.error("❌ Error:", err.message);
+    console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    console.error("\n📋 Please check:");
+    console.error("   1. Is your bot token correct in .env?");
+    console.error("   2. Is 'Message Content Intent' enabled in Discord Developer Portal?");
+    console.error("   3. Is 'Server Members Intent' enabled in Discord Developer Portal?");
+    console.error("   4. Go to: https://discord.com/developers/applications");
     process.exit(1);
   }
 }
