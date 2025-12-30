@@ -480,6 +480,9 @@ app.get("/send-protection", async (req, res) => {
   }
 });
 
+async function initialSync() {
+  console.log("ℹ️ initialSync skipped (not implemented)");
+}
 
 // ----------------------
 // Startup Sequence
@@ -487,32 +490,23 @@ app.get("/send-protection", async (req, res) => {
 async function startApp() {
   console.log("🚀 Starting Crusty Webhook Manager...");
 
-  // 1. Load from .env
-  await loadFromEnv();
-  
-  // 3. If still empty, load from Discord backup
-  if (webhooks.size === 0) {
-    console.log("⚠️ No webhooks found, checking Discord backup...");
-    // Start Discord bot first to access messages
-    await client.login(BOT_TOKEN);
-    await new Promise(resolve => setTimeout(resolve, 3000)); // Wait for bot to be ready
-    await loadFromDiscordBackup();
-  } else {
-    // Start Discord bot normally
-    await client.login(BOT_TOKEN);
-  }
-
-  // 4. Start Express server
+  // EXPRESS ÖNCE
   app.listen(PORT, () => {
     console.log(`✅ Express server running on port ${PORT}`);
   });
 
-  // 5. Start periodic sync
-  setInterval(syncWithCrusty, FETCH_INTERVAL);
+  // SONRA BOT & DİĞER İŞLER
+  await loadFromEnv();
+  await initialSync();
+
+  if (webhooks.size === 0) {
+    console.log("⚠️ No webhooks found, checking Discord backup...");
+    await client.login(BOT_TOKEN);
+    await new Promise(r => setTimeout(r, 3000));
+    await loadFromDiscordBackup();
+  } else {
+    await client.login(BOT_TOKEN);
+  }
 }
 
-// Start the application
-startApp().catch((err) => {
-  console.error("❌ Failed to start application:", err);
-  process.exit(1);
-});
+startApp().catch(console.error);
