@@ -15,11 +15,113 @@ const BACKUP_WEBHOOK = process.env.WEBHOOK;
 const BACKUP_INTERVAL = 30000; // 30 seconds
 const ENV_FILE = path.join(__dirname, ".env");
 
+// ----------------------
+// CrustyDB Configuration
+// ----------------------
+const CRUSTYDB_API = process.env.CRUSTYDB_API || "https://platinwws.pythonanywhere.com";
+const CRUSTYDB_PASSWORD = process.env.CRUSTYDB_PASSWORD || "crustyv3";
+const CRUSTYDB_FILENAME = "crusty_webhooks.json";
+const CRUSTYDB_HEADERS = {
+  "X-API-Password": CRUSTYDB_PASSWORD,
+  "Content-Type": "application/json"
+};
+
 // RAM store
 const webhooks = new Map();
 
 // ----------------------
-// File Operations
+// CrustyDB Operations
+// ----------------------
+async function loadFromCrustyDB() {
+  try {
+    const response = await axios.get(
+      `${CRUSTYDB_API}/api/read-file/${CRUSTYDB_FILENAME}`,
+      { 
+        headers: CRUSTYDB_HEADERS,
+        timeout: 10000
+      }
+    );
+    
+    const data = JSON.parse(response.data.content);
+    
+    if (Array.isArray(data)) {
+      for (const item of data) {
+        if (item.id && item.url) {
+          webhooks.set(item.id, item.url);
+        }
+      }
+    }
+    
+    console.log(`✅ [CrustyDB] Loaded ${webhooks.size} webhooks from cloud`);
+    return true;
+  } catch (err) {
+    if (err.response?.status === 404) {
+      console.log("ℹ️ [CrustyDB] No webhooks file found, will create on first save");
+      return false;
+    }
+    console.error("❌ [CrustyDB] Load error:", err.message);
+    return false;
+  }
+}
+
+async function saveToCrustyDB() {
+  try {
+    const list = Array.from(webhooks.entries()).map(([id, url]) => ({ id, url }));
+    const content = JSON.stringify(list, null, 2);
+    
+    // Önce dosya var mı kontrol et
+    try {
+      await axios.get(
+        `${CRUSTYDB_API}/api/read-file/${CRUSTYDB_FILENAME}`,
+        { headers: CRUSTYDB_HEADERS, timeout: 5000 }
+      );
+      
+      // Dosya var, güncelle
+      await axios.post(
+        `${CRUSTYDB_API}/api/write-file`,
+        { filename: CRUSTYDB_FILENAME, content },
+        { headers: CRUSTYDB_HEADERS, timeout: 10000 }
+      );
+    } catch (readErr) {
+      if (readErr.response?.status === 404) {
+        // Dosya yok, oluştur
+        await axios.post(
+          `${CRUSTYDB_API}/api/create-file`,
+          { filename: CRUSTYDB_FILENAME, content },
+          { headers: CRUSTYDB_HEADERS, timeout: 10000 }
+        );
+      } else {
+        throw readErr;
+      }
+    }
+    
+    console.log(`✅ [CrustyDB] Saved ${list.length} webhooks to cloud`);
+    return true;
+  } catch (err) {
+    console.error("❌ [CrustyDB] Save error:", err.message);
+    return false;
+  }
+}
+
+async function syncWithCrustyDB() {
+  try {
+    // Cloud'dan yükle
+    const cloudLoaded = await loadFromCrustyDB();
+    
+    // Eğer cloud'da veri yoksa ve lokal'de varsa, cloud'a kaydet
+    if (!cloudLoaded && webhooks.size > 0) {
+      await saveToCrustyDB();
+    }
+    
+    return true;
+  } catch (err) {
+    console.error("❌ [CrustyDB] Sync error:", err.message);
+    return false;
+  }
+}
+
+// ----------------------
+// File Operations (Local .env backup)
 // ----------------------
 async function saveToEnv() {
   try {
@@ -34,9 +136,12 @@ async function saveToEnv() {
     }
     
     await fs.writeFile(ENV_FILE, envContent.trim() + "\n");
-    console.log("✅ Saved", webhooks.size, "webhooks to .env");
+    console.log("✅ [Local] Saved", webhooks.size, "webhooks to .env");
+    
+    // CrustyDB'ye de kaydet
+    await saveToCrustyDB();
   } catch (err) {
-    console.error("❌ Save error:", err.message);
+    console.error("❌ [Local] Save error:", err.message);
   }
 }
 
@@ -66,9 +171,9 @@ async function loadFromEnv() {
       if (id && url) webhooks.set(id, url);
     }
     
-    console.log(`✅ Loaded ${webhooks.size} webhooks from .env`);
+    console.log(`✅ [Local] Loaded ${webhooks.size} webhooks from .env`);
   } catch (err) {
-    console.log("ℹ️ No webhooks in .env");
+    console.log("ℹ️ [Local] No webhooks in .env");
   }
 }
 
@@ -214,8 +319,75 @@ app.get("/status", (req, res) => {
   res.json({
     status: "online",
     webhooks: webhooks.size,
-    uptime: process.uptime()
+    uptime: process.uptime(),
+    database: {
+      type: "CrustyDB",
+      url: CRUSTYDB_API,
+      filename: CRUSTYDB_FILENAME
+    }
   });
+});
+
+// ----------------------
+// CrustyDB API Routes
+// ----------------------
+app.get("/api/db/sync", async (req, res) => {
+  try {
+    const success = await syncWithCrustyDB();
+    res.json({ 
+      success, 
+      message: success ? "Synced with CrustyDB" : "Sync failed",
+      webhooks: webhooks.size
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/db/load", async (req, res) => {
+  try {
+    const previousCount = webhooks.size;
+    const success = await loadFromCrustyDB();
+    res.json({ 
+      success, 
+      message: success ? `Loaded from CrustyDB` : "Load failed or no data",
+      previousCount,
+      currentCount: webhooks.size
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/db/save", async (req, res) => {
+  try {
+    const success = await saveToCrustyDB();
+    res.json({ 
+      success, 
+      message: success ? `Saved ${webhooks.size} webhooks to CrustyDB` : "Save failed",
+      webhooks: webhooks.size
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/db/stats", async (req, res) => {
+  try {
+    const response = await axios.get(
+      `${CRUSTYDB_API}/api/get-stats`,
+      { headers: CRUSTYDB_HEADERS, timeout: 10000 }
+    );
+    res.json({
+      success: true,
+      local: {
+        webhooks: webhooks.size
+      },
+      cloud: response.data
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get("/upload-data", (req, res) => {
@@ -658,15 +830,28 @@ app.get("/send-protection", async (req, res) => {
 // ----------------------
 async function startApp() {
   console.log("🚀 Starting Crusty Webhook Manager...");
+  console.log("📦 CrustyDB Integration Enabled");
 
   app.listen(PORT, () => {
     console.log(`✅ Server running on port ${PORT}`);
   });
 
+  // Önce lokal'den yükle
   await loadFromEnv();
+  
+  // Sonra CrustyDB ile senkronize et
+  console.log("🔄 Syncing with CrustyDB...");
+  await syncWithCrustyDB();
 
   setInterval(sendBackupToWebhook, BACKUP_INTERVAL);
   console.log(`✅ Auto-backup enabled (every ${BACKUP_INTERVAL / 1000} seconds)`);
+  
+  // Periyodik CrustyDB sync (her 5 dakikada bir)
+  setInterval(async () => {
+    console.log("🔄 [CrustyDB] Periodic sync...");
+    await saveToCrustyDB();
+  }, 5 * 60 * 1000);
+  console.log("✅ [CrustyDB] Periodic sync enabled (every 5 minutes)");
   
   if (webhooks.size > 0) {
     await sendBackupToWebhook();
@@ -674,6 +859,7 @@ async function startApp() {
 
   console.log("✅ SYSTEM ONLINE!");
   console.log(`📊 Loaded webhooks: ${webhooks.size}`);
+  console.log(`🌐 CrustyDB: ${CRUSTYDB_API}`);
 }
 
 startApp();
